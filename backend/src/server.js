@@ -2,7 +2,10 @@ import { authenticate } from "./middleware/authenticate.js";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import { handleChatMessage } from "./services/chat.service.js";
+import {
+  handleChatMessage,
+  getChatSuggestions
+} from "./services/chat.service.js";
 import { testDatabaseConnection } from "./config/db.js";
 import { persistChatTurn } from "./services/chatPersistence.service.js";
 import {
@@ -29,6 +32,26 @@ app.use(express.json({ limit: "100kb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "unwind-chatbot-test" });
+});
+
+// Authenticated chatbot autocomplete suggestions
+app.get("/api/suggestions", authenticate, (req, res) => {
+  try {
+    const query = String(req.query.q || "").slice(0, 100);
+    const suggestions = getChatSuggestions(query);
+
+    res.json({
+      success: true,
+      suggestions
+    });
+  } catch (error) {
+    console.error("Suggestion request failed:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Unable to load suggestions."
+    });
+  }
 });
 
 app.post("/api/chat", authenticate, async (req, res) => {
