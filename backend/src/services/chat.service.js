@@ -84,9 +84,12 @@ const SUGGESTION_ALLOWED_TAGS = new Set([
 export function getChatSuggestions(query) {
   if (typeof query !== "string") return [];
 
+  if (process.env.ENABLE_PREDEFINED_RESPONSES === "false") {
+    return [];
+  }
+
   const normalizedQuery = normalize(query);
 
-  // Avoid showing suggestions for empty or very short input.
   if (normalizedQuery.length < 2) return [];
 
   const suggestions = [];
@@ -94,7 +97,18 @@ export function getChatSuggestions(query) {
 
   for (const intent of intents) {
     if (!SUGGESTION_ALLOWED_TAGS.has(intent.tag)) continue;
-    if (!Array.isArray(intent.patterns)) continue;
+
+    // Only suggest patterns that have actual predefined replies.
+    if (
+      !Array.isArray(intent.patterns) ||
+      !Array.isArray(intent.responses) ||
+      !intent.responses.some(
+        (response) =>
+          typeof response === "string" && response.trim().length > 0
+      )
+    ) {
+      continue;
+    }
 
     for (const pattern of intent.patterns) {
       if (typeof pattern !== "string") continue;
