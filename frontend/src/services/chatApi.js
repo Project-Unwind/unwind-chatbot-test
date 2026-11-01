@@ -1,4 +1,3 @@
-
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5000"
 ).replace(/\/$/, "");
@@ -97,4 +96,31 @@ export async function sendChatMessage(message, conversationId = null) {
   }
 
   return data;
+}
+
+
+export async function fetchConversations() {
+  const data = await authenticatedRequest("/api/conversations", {
+    method: "GET",
+  });
+
+  return data.conversations || [];
+}
+
+export async function fetchConversationMessages(conversationId) {
+  if (!conversationId) {
+    throw new Error("A conversation ID is required.");
+  }
+
+  const data = await authenticatedRequest(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: "GET",
+    }
+  );
+
+  return {
+    conversation: data.conversation,
+    messages: Array.isArray(data.messages) ? data.messages : [],
+  };
 }

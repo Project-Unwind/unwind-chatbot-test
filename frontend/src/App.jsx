@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   fetchChatSuggestions,
+  fetchConversations,
+  fetchConversationMessages,
   sendChatMessage
 } from "./services/chatApi";
 import "./App.css";
@@ -97,9 +99,59 @@ function formatTime() {
   }).format(new Date());
 }
 
+function formatConversationDate(dateValue) {
+  if (!dateValue) return "Today";
+
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) return "Today";
+
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) {
+    return "Today";
+  }
+
+  if (date.toDateString() === yesterday.toDateString()) {
+    return "Yesterday";
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    day: "numeric",
+    month: "short"
+  }).format(date);
+}
+
+function mapDatabaseMessage(message) {
+  return {
+    id: message.message_id,
+    role: message.message_role,
+    content: message.message_content,
+    time: formatTimeFromDate(message.created_at)
+  };
+}
+
+function formatTimeFromDate(dateValue) {
+  if (!dateValue) return "";
+
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
+}
+
+const ACTIVE_CONVERSATION_KEY = "unwind_chatbot_active_conversation";
+
 function App() {
-  const [conversations, setConversations] = useState(initialConversations);
-  const [activeId, setActiveId] = useState(1);
+  const [conversations, setConversations] = useState([]);
+const [activeId, setActiveId] = useState(null);
+const [historyLoading, setHistoryLoading] = useState(false);
   const [input, setInput] = useState("");
   const [search, setSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -116,6 +168,115 @@ const [conversationError, setConversationError] = useState("");
   const activeConversation = conversations.find(
     (conversation) => conversation.id === activeId
   );
+
+  const historyRequestRef = useRef(0);
+
+  useEffect(() => {
+  if (activeId) {
+    localStorage.setItem(
+      ACTIVE_CONVERSATION_KEY,
+      activeId
+    );
+  }
+}, [activeId]);
+
+// Load saved conversations when the application opens.
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadSavedConversations() {
+    try {
+      const savedConversations = await fetchConversations();
+
+      if (cancelled) return;
+
+      const mappedConversations = savedConversations.map((item) => ({
+        id: item.conversation_id,
+        apiConversationId: item.conversation_id,
+        title: item.title || "New conversation",
+        date: formatConversationDate(
+          item.last_message_at || item.created_at
+        ),
+        messages: [],
+        totalMessages: item.total_messages || 0
+      }));
+
+      setConversations(mappedConversations);
+
+const savedActiveId = localStorage.getItem(
+  ACTIVE_CONVERSATION_KEY
+);
+
+const savedConversationExists = mappedConversations.some(
+  (conversation) => conversation.id === savedActiveId
+);
+
+if (savedConversationExists) {
+  setActiveId(savedActiveId);
+} else if (mappedConversations.length > 0) {
+  setActiveId(mappedConversations[0].id);
+} else {
+  setActiveId(null);
+}
+    } catch (error) {
+      console.error("Unable to load saved conversations:", error);
+      setConversationError(error.message);
+    }
+  }
+
+  loadSavedConversations();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
+// Load messages whenever the selected database conversation changes.
+useEffect(() => {
+  const selectedConversation = conversations.find(
+    (conversation) => conversation.id === activeId
+  );
+
+  if (!selectedConversation?.apiConversationId) return;
+
+  const requestId = ++historyRequestRef.current;
+  let cancelled = false;
+
+  async function loadConversationHistory() {
+    try {
+      setHistoryLoading(true);
+
+      const history = await fetchConversationMessages(
+        selectedConversation.apiConversationId
+      );
+
+      if (cancelled || requestId !== historyRequestRef.current) return;
+
+      const mappedMessages = history.messages.map(mapDatabaseMessage);
+
+      updateConversation(activeId, (conversation) => ({
+        ...conversation,
+        title: history.conversation?.title || conversation.title,
+        messages: mappedMessages
+      }));
+    } catch (error) {
+      if (!cancelled && requestId === historyRequestRef.current) {
+        console.error("Unable to load conversation history:", error);
+        setConversationError(error.message);
+      }
+    } finally {
+      if (!cancelled && requestId === historyRequestRef.current) {
+        setHistoryLoading(false);
+      }
+    }
+  }
+
+  loadConversationHistory();
+
+  return () => {
+    cancelled = true;
+  };
+}, [activeId, conversations.length]);
 
   const messages = activeConversation?.messages || [];
 
@@ -167,18 +328,24 @@ const [conversationError, setConversationError] = useState("");
 }, [input, sending]);
 
   function createConversation() {
-    const newConversation = {
-      id: Date.now(),
-      title: "New conversation",
-      date: "Today",
-      messages: []
-    };
+  const newConversation = {
+    id: `draft-${Date.now()}`,
+    apiConversationId: null,
+    title: "New conversation",
+    date: "Today",
+    messages: [],
+    totalMessages: 0
+  };
 
-    setConversations((current) => [newConversation, ...current]);
-    setActiveId(newConversation.id);
-    setInput("");
-    setSidebarOpen(false);
-  }
+  setConversations((current) => [
+    newConversation,
+    ...current
+  ]);
+
+  setActiveId(newConversation.id);
+  setInput("");
+  setSidebarOpen(false);
+}
 
   function selectConversation(id) {
     setActiveId(id);
@@ -193,7 +360,8 @@ const [conversationError, setConversationError] = useState("");
     );
   }
 
-  async function sendMessage(event, selectedMessage = null) {
+
+async function sendMessage(event, selectedMessage = null) {
   event?.preventDefault();
 
   const content = (
@@ -205,7 +373,7 @@ const [conversationError, setConversationError] = useState("");
   const currentId = activeId;
 
   const userMessage = {
-    id: Date.now(),
+    id: `user-${Date.now()}`,
     role: "user",
     content,
     time: formatTime()
@@ -238,24 +406,59 @@ const [conversationError, setConversationError] = useState("");
       conversation?.apiConversationId || null
     );
 
+    if (!response.conversationId) {
+      throw new Error("The backend did not return a conversation ID.");
+    }
+
     const assistantMessage = {
-      id: Date.now() + 1,
+      id: `assistant-${Date.now()}`,
       role: "assistant",
       content: response.reply,
       time: formatTime()
     };
 
-    updateConversation(currentId, (current) => ({
-      ...current,
-      apiConversationId:
-        response.conversationId || current.apiConversationId,
-      messages: [...current.messages, assistantMessage]
-    }));
+    // Replace the temporary ID with the database UUID
+    // and move this conversation to the top of the sidebar.
+    setConversations((current) => {
+      const updated = current.map((item) => {
+        if (item.id !== currentId) return item;
+
+        return {
+          ...item,
+          id: response.conversationId,
+          apiConversationId: response.conversationId,
+          title:
+            item.totalMessages === 0
+              ? content.length > 30
+                ? `${content.slice(0, 30)}…`
+                : content
+              : item.title,
+          date: "Today",
+          totalMessages: (item.totalMessages || 0) + 2,
+          messages: [
+            ...item.messages,
+            assistantMessage
+          ]
+        };
+      });
+
+      return updated.sort((a, b) => {
+        if (a.id === response.conversationId) return -1;
+        if (b.id === response.conversationId) return 1;
+        return 0;
+      });
+    });
+
+    // Keep the current selection if the user hasn't switched chats.
+    setActiveId((current) =>
+      current === currentId ? response.conversationId : current
+    );
+
   } catch (error) {
     console.error("Chat request failed:", error);
 
     const errorMessage = {
-      id: Date.now() + 1,
+      id: `error-${Date.now()}`,
       role: "assistant",
       content: error.message || "Something went wrong. Please try again.",
       time: formatTime()
