@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  fetchChatSuggestions,
+  sendChatMessage
+} from "./services/chatApi";
 import "./App.css";
 
 const suggestions = [
@@ -26,12 +30,6 @@ const suggestions = [
     description: "Take a moment to slow down and reset.",
     prompt: "I'd like to find a little calm and relax."
   }
-];
-
-const demoReplies = [
-  "Thank you for sharing that with me. Sometimes putting what we're feeling into words is a meaningful first step. Would you like to tell me a little more about what's been happening?",
-  "I hear you. You don't have to have everything figured out right now. Let's take this one step at a time. What's been weighing on you the most?",
-  "That sounds like something worth giving yourself time and space to explore. Be gentle with yourself. What do you think you need most in this moment?"
 ];
 
 const initialConversations = [
@@ -107,6 +105,10 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [sending, setSending] = useState(false);
+  const [backendSuggestions, setBackendSuggestions] = useState([]);
+const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+const [showSuggestions, setShowSuggestions] = useState(false);
+const [conversationError, setConversationError] = useState("");
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -120,6 +122,49 @@ function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
+
+  useEffect(() => {
+  const query = input.trim();
+
+  if (!query || sending) {
+    setBackendSuggestions([]);
+    setShowSuggestions(false);
+    setSuggestionsLoading(false);
+    return;
+  }
+
+  let cancelled = false;
+
+  const timer = setTimeout(async () => {
+    try {
+      setSuggestionsLoading(true);
+
+      const results = await fetchChatSuggestions(query);
+
+      if (!cancelled) {
+        setBackendSuggestions(
+          Array.isArray(results) ? results : []
+        );
+        setShowSuggestions(true);
+      }
+    } catch (error) {
+      if (!cancelled) {
+        console.error("Unable to fetch suggestions:", error);
+        setBackendSuggestions([]);
+        setShowSuggestions(false);
+      }
+    } finally {
+      if (!cancelled) {
+        setSuggestionsLoading(false);
+      }
+    }
+  }, 300);
+
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
+}, [input, sending]);
 
   function createConversation() {
     const newConversation = {
@@ -148,52 +193,85 @@ function App() {
     );
   }
 
-  async function sendMessage(event) {
-    event?.preventDefault();
+  async function sendMessage(event, selectedMessage = null) {
+  event?.preventDefault();
 
-    const content = input.trim();
-    if (!content || sending) return;
+  const content = (
+    selectedMessage !== null ? selectedMessage : input
+  ).trim();
 
-    const userMessage = {
-      id: Date.now(),
-      role: "user",
+  if (!content || sending) return;
+
+  const currentId = activeId;
+
+  const userMessage = {
+    id: Date.now(),
+    role: "user",
+    content,
+    time: formatTime()
+  };
+
+  updateConversation(currentId, (conversation) => ({
+    ...conversation,
+    title:
+      conversation.messages.length === 0
+        ? content.length > 30
+          ? `${content.slice(0, 30)}…`
+          : content
+        : conversation.title,
+    messages: [...conversation.messages, userMessage]
+  }));
+
+  setInput("");
+  setBackendSuggestions([]);
+  setShowSuggestions(false);
+  setConversationError("");
+  setSending(true);
+
+  try {
+    const conversation = conversations.find(
+      (item) => item.id === currentId
+    );
+
+    const response = await sendChatMessage(
       content,
-      time: formatTime()
-    };
-
-    const currentId = activeId;
-
-    updateConversation(currentId, (conversation) => ({
-      ...conversation,
-      title:
-        conversation.messages.length === 0
-          ? content.length > 30
-            ? `${content.slice(0, 30)}…`
-            : content
-          : conversation.title,
-      messages: [...conversation.messages, userMessage]
-    }));
-
-    setInput("");
-    setSending(true);
-
-    // Temporary frontend preview. Replace with the API call during integration.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+      conversation?.apiConversationId || null
+    );
 
     const assistantMessage = {
       id: Date.now() + 1,
       role: "assistant",
-      content: demoReplies[Math.floor(Math.random() * demoReplies.length)],
+      content: response.reply,
       time: formatTime()
     };
 
-    updateConversation(currentId, (conversation) => ({
-      ...conversation,
-      messages: [...conversation.messages, assistantMessage]
+    updateConversation(currentId, (current) => ({
+      ...current,
+      apiConversationId:
+        response.conversationId || current.apiConversationId,
+      messages: [...current.messages, assistantMessage]
+    }));
+  } catch (error) {
+    console.error("Chat request failed:", error);
+
+    const errorMessage = {
+      id: Date.now() + 1,
+      role: "assistant",
+      content: error.message || "Something went wrong. Please try again.",
+      time: formatTime()
+    };
+
+    updateConversation(currentId, (current) => ({
+      ...current,
+      messages: [...current.messages, errorMessage]
     }));
 
+    setConversationError(error.message);
+  } finally {
     setSending(false);
+    inputRef.current?.focus();
   }
+}
 
   async function copyMessage(message) {
     try {
@@ -373,10 +451,7 @@ function App() {
                   <button
                     className="suggestion-card"
                     key={suggestion.title}
-                    onClick={() => {
-                      setInput(suggestion.prompt);
-                      inputRef.current?.focus();
-                    }}
+                    onClick={() => sendMessage(null, suggestion.prompt)}
                   >
                     <span className="suggestion-icon">
                       <Icon name={suggestion.icon} size={19} />
@@ -465,51 +540,95 @@ function App() {
           )}
         </div>
 
-        <footer className="composer-area">
-          <form className="message-composer" onSubmit={sendMessage}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  sendMessage(event);
-                }
-              }}
-              placeholder="Share what's on your mind..."
-              rows={1}
-              maxLength={4000}
-              aria-label="Write your message"
-            />
-            <div className="composer-controls">
-              <span className="composer-hint">
-                <Icon name="sparkle" size={14} />
-                A safe space to express yourself
-              </span>
-              <div className="composer-actions">
-                <span className="character-count">
-                  {input.length > 0 ? `${input.length}/4000` : ""}
-                </span>
-                <button
-                  className="send-button"
-                  type="submit"
-                  disabled={!input.trim() || sending}
-                  aria-label="Send message"
-                >
-                  <Icon name="send" size={18} />
-                </button>
-              </div>
-            </div>
-          </form>
+        
+<footer className="composer-area">
+  <div className="composer-wrapper">
+    {showSuggestions && backendSuggestions.length > 0 && (
+      <div className="autocomplete-dropdown">
+        <div className="autocomplete-heading">
+          <Icon name="sparkle" size={14} />
+          Suggested messages
+        </div>
 
-          <p className="composer-disclaimer">
-            Unwind is here to support your wellbeing, not replace professional care.
-          </p>
-        </footer>
-      </section>
-    </main>
-  );
+        {backendSuggestions.map((suggestion, index) => (
+          <button
+            key={`${suggestion}-${index}`}
+            type="button"
+            className="autocomplete-item"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => sendMessage(null, suggestion)}
+          >
+            <Icon name="message" size={16} />
+            <span>{suggestion}</span>
+            <Icon name="arrow" size={14} />
+          </button>
+        ))}
+      </div>
+    )}
+
+    {suggestionsLoading && input.trim() && (
+      <div className="autocomplete-loading">
+        Finding suggestions...
+      </div>
+    )}
+
+    <form className="message-composer" onSubmit={sendMessage}>
+      <textarea
+        ref={inputRef}
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onFocus={() => {
+          if (backendSuggestions.length > 0) {
+            setShowSuggestions(true);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage(event);
+          }
+
+          if (event.key === "Escape") {
+            setShowSuggestions(false);
+          }
+        }}
+        placeholder="Share what's on your mind..."
+        rows={1}
+        maxLength={4000}
+        aria-label="Write your message"
+      />
+
+      <div className="composer-controls">
+        <span className="composer-hint">
+          <Icon name="sparkle" size={14} />
+          A safe space to express yourself
+        </span>
+
+        <div className="composer-actions">
+          <span className="character-count">
+            {input.length > 0 ? `${input.length}/4000` : ""}
+          </span>
+
+          <button
+            className="send-button"
+            type="submit"
+            disabled={!input.trim() || sending}
+            aria-label="Send message"
+          >
+            <Icon name="send" size={18} />
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <p className="composer-disclaimer">
+    Unwind is here to support your wellbeing, not replace professional care.
+  </p>
+</footer>
+</section>
+</main>
+);
 }
 
 export default App;
