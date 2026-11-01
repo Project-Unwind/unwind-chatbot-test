@@ -24,6 +24,104 @@ const intents = [
   ...readIntents("KB.json")
 ];
 
+// Only expose suitable, general-purpose topics as autocomplete suggestions.
+const SUGGESTION_ALLOWED_TAGS = new Set([
+  // Main intents
+  "greeting",
+  "stress",
+  "motivation",
+  "self_care",
+  "gratitude",
+
+  // Knowledge-base intents
+  "morning",
+  "afternoon",
+  "evening",
+  "night",
+  "goodbye",
+  "thanks",
+  "neutral-response",
+  "about",
+  "help",
+  "casual",
+  "meditation",
+  "user-meditation",
+  "learn-mental-health",
+  "mental-health-fact",
+  "fact-1",
+  "fact-2",
+  "fact-3",
+  "fact-5",
+  "fact-6",
+  "fact-7",
+  "fact-8",
+  "fact-9",
+  "fact-10",
+  "fact-11",
+  "fact-12",
+  "fact-13",
+  "fact-14",
+  "fact-15",
+  "fact-16",
+  "fact-17",
+  "fact-18",
+  "fact-19",
+  "fact-20",
+  "fact-21",
+  "fact-22",
+  "fact-23",
+  "fact-24",
+  "fact-25",
+  "fact-26",
+  "fact-27",
+  "fact-28",
+  "fact-29",
+  "fact-30",
+  "fact-31",
+  "fact-32"
+]);
+
+export function getChatSuggestions(query) {
+  if (typeof query !== "string") return [];
+
+  const normalizedQuery = normalize(query);
+
+  // Avoid showing suggestions for empty or very short input.
+  if (normalizedQuery.length < 2) return [];
+
+  const suggestions = [];
+  const seen = new Set();
+
+  for (const intent of intents) {
+    if (!SUGGESTION_ALLOWED_TAGS.has(intent.tag)) continue;
+    if (!Array.isArray(intent.patterns)) continue;
+
+    for (const pattern of intent.patterns) {
+      if (typeof pattern !== "string") continue;
+
+      const normalizedPattern = normalize(pattern);
+
+      if (
+        !normalizedPattern ||
+        !normalizedPattern.includes(normalizedQuery)
+      ) {
+        continue;
+      }
+
+      if (seen.has(normalizedPattern)) continue;
+
+      seen.add(normalizedPattern);
+      suggestions.push(pattern);
+
+      if (suggestions.length >= 5) {
+        return suggestions;
+      }
+    }
+  }
+
+  return suggestions;
+}
+
 function normalize(value) {
   return String(value || "")
     .toLowerCase()
