@@ -2,7 +2,7 @@ import re
 from typing import Optional
 
 CREATOR_RESPONSE = (
-    "Unwind was envisioned by Harshita Arava, Co-Founder & CEO, and brought to life through the collaborative efforts of Atharva Padwal, Co-Founder & Co-CEO, and Parth Nikam, Co-Founder & CTO. Combining visionary leadership, strategic execution, and technological expertise, the founding team transformed a shared vision into an innovative wellness platform designed to redefine the way individuals approach mental well-being."
+    "Unwind was envisioned by Harshita Arava, Founder & CEO, and brought to life through the collaborative efforts of Atharva Padwal, Co-Founder & Co-CEO, and Parth Nikam, Co-Founder & CTO. Combining visionary leadership, strategic execution, and technological expertise, the founding team transformed a shared vision into an innovative wellness platform designed to redefine the way individuals approach mental well-being."
 )
 
 GREETING_RESPONSES = {
@@ -82,7 +82,6 @@ def predefined_response(message: str) -> Optional[str]:
         return CREATOR_RESPONSE
 
     return None
-
 
 def policy_response(message: str) -> Optional[str]:
     # Always check deterministic replies before calling a model.
